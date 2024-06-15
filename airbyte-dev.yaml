@@ -1,0 +1,1338 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-dynamicconfig
+  labels:
+    name: temporal
+data:
+  "development.yaml": |
+    # when modifying, remember to update the docker-compose version of this file in temporal/dynamicconfig/development.yaml
+    frontend.enableClientVersionCheck:
+      - value: true
+        constraints: {}
+    history.persistenceMaxQPS:
+      - value: 3000
+        constraints: {}
+    frontend.persistenceMaxQPS:
+      - value: 3000
+        constraints: {}
+    frontend.historyMgrNumConns:
+      - value: 30
+        constraints: {}
+    frontend.throttledLogRPS:
+      - value: 20
+        constraints: {}
+    history.historyMgrNumConns:
+      - value: 50
+        constraints: {}
+    system.advancedVisibilityWritingMode:
+      - value: "off"
+        constraints: {}
+    history.defaultActivityRetryPolicy:
+      - value:
+          InitialIntervalInSeconds: 1
+          MaximumIntervalCoefficient: 100.0
+          BackoffCoefficient: 2.0
+          MaximumAttempts: 0
+    history.defaultWorkflowRetryPolicy:
+      - value:
+          InitialIntervalInSeconds: 1
+          MaximumIntervalCoefficient: 100.0
+          BackoffCoefficient: 2.0
+          MaximumAttempts: 0
+    # Limit for responses. This mostly impacts discovery jobs since they have the largest responses.
+    limit.blobSize.error:
+      - value: 15728640 # 15MB
+        constraints: {}
+    limit.blobSize.warn:
+      - value: 10485760 # 10MB
+        constraints: {}
+
+---
+#apiVersion: rbac.authorization.k8s.io/v1
+#kind: Role
+#metadata:
+#  name: airbyte-admin-role
+#rules:
+#  - apiGroups: ["*"]
+#    resources: ["jobs", "pods", "pods/log", "pods/exec", "pods/attach"]
+#    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"] # over-permission for now
+
+---
+#apiVersion: rbac.authorization.k8s.io/v1
+#kind: RoleBinding
+#metadata:
+# name: airbyte-admin-binding
+#roleRef:
+#  apiGroup: ""
+#  kind: Role
+#  name: airbyte-admin-role
+#subjects:
+#  - kind: ServiceAccount
+#    name: airbyte-admin
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-api-server-svc
+  labels:
+    name: airbyte-api-server
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    name: airbyte-api-server
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-connector-builder-server-svc
+  labels:
+    name: connector-builder-server
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    name: connector-builder-server
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-server-svc
+  labels:
+    name: server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8001
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    name: server
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+  labels:
+    name: temporal
+spec:
+  type: ClusterIP
+  ports:
+  - port: 7233
+    protocol: TCP
+    targetPort: 7233
+  selector:
+    name: temporal
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-webapp-svc
+  labels:
+    name: webapp
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    name: webapp
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airbyte-api-server
+  labels:
+    name: airbyte-api-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: airbyte-api-server
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        name: airbyte-api-server
+    spec:
+      #serviceAccountName: airbyte-admin
+      containers:
+      - name: airbyte-api-server
+        image: airbyte/airbyte-api-server:0.58.0
+        imagePullPolicy: "IfNotPresent"
+        resources:
+          requests:
+            memory: "250Mi"
+            cpu: "250m"
+          limits:
+            memory: "500Mi"
+            cpu: "500m"
+        env:
+        - name: INTERNAL_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONFIG_API_HOST
+        - name: AIRBYTE_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_API_HOST
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_VERSION
+        - name: MICROMETER_METRICS_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_ENABLED
+        - name: MICROMETER_METRICS_STATSD_FLAVOR
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_STATSD_FLAVOR
+        - name: SEGMENT_WRITE_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: SEGMENT_WRITE_KEY
+        - name: STATSD_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_HOST
+        - name: STATSD_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_PORT
+        - name: TRACKING_STRATEGY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TRACKING_STRATEGY
+        - name: SECRET_PERSISTENCE
+          value: ''
+        ports:
+        - name: http
+          containerPort: 8006
+          protocol: TCP
+        resources:
+          limits: {}
+          requests: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+      securityContext:
+        fsGroup: 1000
+      volumes:
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: connector-builder-server
+  labels:
+    name: connector-builder-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: connector-builder-server
+  strategy:
+    type: 
+  template:
+    metadata:
+      labels:
+        name: connector-builder-server
+    spec:
+      # serviceAccountName: airbyte-admin
+      containers:
+      - name: airbyte-connector-builder-server
+        image: airbyte/connector-builder-server:0.58.0
+        imagePullPolicy: "IfNotPresent"
+        resources:
+          requests:
+            memory: "250Mi"
+            cpu: "250m"
+          limits:
+            memory: "500Mi"
+            cpu: "500m"
+
+        env:
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_VERSION
+        - name: MICROMETER_METRICS_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_ENABLED
+        - name: MICROMETER_METRICS_STATSD_FLAVOR
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_STATSD_FLAVOR
+        - name: SEGMENT_WRITE_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: SEGMENT_WRITE_KEY
+        - name: STATSD_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_HOST
+        - name: STATSD_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_PORT
+        - name: TRACKING_STRATEGY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TRACKING_STRATEGY
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+      securityContext:
+        fsGroup: 1000
+      volumes:
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  labels:
+    name: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: server
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        name: server
+    spec:
+      #serviceAccountName: airbyte-admin
+      containers:
+      - name: airbyte-server-container
+        image: airbyte/server:0.58.0
+        imagePullPolicy: "IfNotPresent"
+        resources:
+          requests:
+            memory: "250Mi"
+            cpu: "250m"
+          limits:
+            memory: "500Mi"
+            cpu: "500m"
+        env:
+        - name: AIRBYTE_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_API_HOST
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_VERSION
+        - name: AIRBYTE_EDITION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_EDITION
+        - name: AUTO_DETECT_SCHEMA
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AUTO_DETECT_SCHEMA
+        - name: CONFIG_ROOT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONFIG_ROOT
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DATABASE_PASSWORD
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: DATABASE_URL
+        - name: DATABASE_USER
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DATABASE_USER
+        - name: LOG4J_CONFIGURATION_FILE
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: LOG4J_CONFIGURATION_FILE
+        - name: MICROMETER_METRICS_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_ENABLED
+        - name: MICROMETER_METRICS_STATSD_FLAVOR
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_STATSD_FLAVOR
+        - name: SEGMENT_WRITE_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: SEGMENT_WRITE_KEY
+        - name: STATSD_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_HOST
+        - name: STATSD_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_PORT
+        - name: TRACKING_STRATEGY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TRACKING_STRATEGY
+        - name: WORKER_ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WORKER_ENVIRONMENT
+        - name: WORKSPACE_ROOT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WORKSPACE_ROOT
+        - name: WEBAPP_URL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WEBAPP_URL
+        - name: TEMPORAL_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TEMPORAL_HOST
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: JOB_MAIN_CONTAINER_CPU_REQUEST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_CPU_REQUEST
+        - name: JOB_MAIN_CONTAINER_CPU_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_CPU_LIMIT
+        - name: JOB_MAIN_CONTAINER_MEMORY_REQUEST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_MEMORY_REQUEST
+        - name: JOB_MAIN_CONTAINER_MEMORY_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_MEMORY_LIMIT
+        - name: CONFIGS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONFIGS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+        - name: JOBS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOBS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+        - name: KEYCLOAK_INTERNAL_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: KEYCLOAK_INTERNAL_HOST
+        - name: CONNECTOR_BUILDER_SERVER_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONNECTOR_BUILDER_SERVER_API_HOST
+        - name: AIRBYTE_API_AUTH_HEADER_NAME
+          value: "X-Airbyte-Auth"
+        - name: AIRBYTE_API_AUTH_HEADER_VALUE
+          value: "Internal server"
+        - name: SECRET_PERSISTENCE
+          value: ''
+        - name: STORAGE_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_TYPE
+        - name: STORAGE_BUCKET_ACTIVITY_PAYLOAD
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_ACTIVITY_PAYLOAD
+        - name: STORAGE_BUCKET_LOG
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_LOG
+        - name: STORAGE_BUCKET_STATE
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_STATE
+        - name: STORAGE_BUCKET_WORKLOAD_OUTPUT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_WORKLOAD_OUTPUT
+        - name: S3_PATH_STYLE_ACCESS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: S3_PATH_STYLE_ACCESS
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DEFAULT_MINIO_ACCESS_KEY
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DEFAULT_MINIO_SECRET_KEY
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MINIO_ENDPOINT
+        ports:
+        - name: http
+          containerPort: 8001
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: airbyte-yml-volume
+          mountPath: /app/configs/airbyte.yml
+          subPath: fileContents
+          readOnly: true
+      securityContext:
+        fsGroup: 1000
+      volumes:
+      - name: airbyte-yml-volume
+        secret:
+          secretName: airbyte-yml
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal
+  labels:
+    name: temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: temporal
+  template:
+    metadata:
+      labels:
+        name: temporal
+    spec:
+      #serviceAccountName: airbyte-admin
+      containers:
+      - name: airbyte-temporal
+        image: temporalio/auto-setup:1.20.1
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            memory: "250Mi"
+            cpu: "250m"
+          limits:
+            memory: "500Mi"
+            cpu: "500m"
+        env:
+          - name: AUTO_SETUP
+            value: "true"
+          - name: DB
+            value: "postgresql"
+          - name: DB_PORT
+            valueFrom:
+              configMapKeyRef:
+                name: airbyte-env
+                key: DATABASE_PORT
+          - name: POSTGRES_USER
+            valueFrom:
+              secretKeyRef:
+                name: airbyte-secrets
+                key: DATABASE_USER
+          - name: POSTGRES_PWD
+            valueFrom:
+              secretKeyRef:
+                name: airbyte-secrets
+                key: DATABASE_PASSWORD
+          - name: POSTGRES_SEEDS
+            valueFrom:
+              configMapKeyRef:
+                name: airbyte-env
+                key: DATABASE_HOST
+          - name: DYNAMIC_CONFIG_FILE_PATH
+            value: "config/dynamicconfig/development.yaml"
+        ports:
+        - containerPort: 7233
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: airbyte-temporal-dynamicconfig
+          mountPath: "/etc/temporal/config/dynamicconfig/"
+      securityContext:
+        fsGroup: 1000
+      volumes:
+      - name: airbyte-temporal-dynamicconfig
+        configMap:
+          name: temporal-dynamicconfig
+          items:
+          - key: development.yaml
+            path: development.yaml
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+  labels:
+    name: webapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: webapp
+  template:
+    metadata:
+      labels:
+        name: webapp
+    spec:
+      #serviceAccountName: airbyte-admin
+      containers:
+      - name: airbyte-webapp-container
+        image: airbyte/webapp:0.58.0
+        imagePullPolicy: "IfNotPresent"
+        resources:
+          requests:
+            memory: "250Mi"
+            cpu: "250m"
+          limits:
+            memory: "500Mi"
+            cpu: "500m"
+        env:
+        - name: TRACKING_STRATEGY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TRACKING_STRATEGY
+        - name: INTERNAL_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: INTERNAL_API_HOST
+        - name: KEYCLOAK_INTERNAL_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: KEYCLOAK_INTERNAL_HOST
+        - name: CONNECTOR_BUILDER_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONNECTOR_BUILDER_API_HOST
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_VERSION
+        - name: API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: API_URL
+        - name: CONNECTOR_BUILDER_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONNECTOR_BUILDER_API_URL
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 101
+          runAsNonRoot: true
+          runAsUser: 101
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+      securityContext:
+        fsGroup: 101
+      volumes:
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    name: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: worker
+  template:
+    metadata:
+      labels:
+        name: worker
+    spec:
+      # serviceAccountName: airbyte-admin
+      #automountServiceAccountToken: true
+      containers:
+      - name: airbyte-worker-container
+        image: airbyte/worker:0.58.0
+        imagePullPolicy: "IfNotPresent"
+        resources:
+          requests:
+            memory: "250Mi"
+            cpu: "250m"
+          limits:
+            memory: "500Mi"
+            cpu: "500m"
+        env:
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_VERSION
+        - name: CONFIG_ROOT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONFIG_ROOT
+        - name: DATABASE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: DATABASE_HOST
+        - name: DATABASE_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: DATABASE_PORT
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+                name: airbyte-secrets
+                key: DATABASE_PASSWORD
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: DATABASE_URL
+        - name: DATABASE_USER
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DATABASE_USER
+        - name: LOG4J_CONFIGURATION_FILE
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: LOG4J_CONFIGURATION_FILE
+        - name: MICROMETER_METRICS_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_ENABLED
+        - name: MICROMETER_METRICS_STATSD_FLAVOR
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MICROMETER_METRICS_STATSD_FLAVOR
+        - name: SEGMENT_WRITE_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: SEGMENT_WRITE_KEY
+        - name: STATSD_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_HOST
+        - name: STATSD_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STATSD_PORT
+        - name: TRACKING_STRATEGY
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TRACKING_STRATEGY
+        - name: WORKSPACE_DOCKER_MOUNT
+          value: workspace
+        - name: WORKSPACE_ROOT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WORKSPACE_ROOT
+        - name: LOCAL_ROOT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: LOCAL_ROOT
+        - name: WEBAPP_URL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WEBAPP_URL
+        - name: TEMPORAL_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TEMPORAL_HOST
+        - name: TEMPORAL_WORKER_PORTS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: TEMPORAL_WORKER_PORTS
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: JOB_KUBE_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: JOB_KUBE_SERVICEACCOUNT
+          value: airbyte-admin
+        - name: JOB_MAIN_CONTAINER_CPU_REQUEST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_CPU_REQUEST
+        - name: JOB_MAIN_CONTAINER_CPU_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_CPU_LIMIT
+        - name: JOB_MAIN_CONTAINER_MEMORY_REQUEST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_MEMORY_REQUEST
+        - name: JOB_MAIN_CONTAINER_MEMORY_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOB_MAIN_CONTAINER_MEMORY_LIMIT
+        - name: INTERNAL_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: INTERNAL_API_HOST
+        - name: WORKLOAD_API_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WORKLOAD_API_HOST
+        - name: WORKLOAD_API_BEARER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: WORKLOAD_API_BEARER_TOKEN
+        - name: CONFIGS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: CONFIGS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+        - name: JOBS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: JOBS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION
+        - name: METRIC_CLIENT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: METRIC_CLIENT
+        - name: OTEL_COLLECTOR_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: OTEL_COLLECTOR_ENDPOINT
+        - name: ACTIVITY_MAX_ATTEMPT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: ACTIVITY_MAX_ATTEMPT
+        - name: ACTIVITY_INITIAL_DELAY_BETWEEN_ATTEMPTS_SECONDS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: ACTIVITY_INITIAL_DELAY_BETWEEN_ATTEMPTS_SECONDS
+        - name: ACTIVITY_MAX_DELAY_BETWEEN_ATTEMPTS_SECONDS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: ACTIVITY_MAX_DELAY_BETWEEN_ATTEMPTS_SECONDS
+        - name: WORKFLOW_FAILURE_RESTART_DELAY_SECONDS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WORKFLOW_FAILURE_RESTART_DELAY_SECONDS
+        - name: AUTO_DETECT_SCHEMA
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AUTO_DETECT_SCHEMA
+        - name: SHOULD_RUN_NOTIFY_WORKFLOWS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: SHOULD_RUN_NOTIFY_WORKFLOWS
+        - name: MICRONAUT_ENVIRONMENTS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: WORKERS_MICRONAUT_ENVIRONMENTS
+        - name: SECRET_PERSISTENCE
+          value: ''
+        - name: STORAGE_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_TYPE
+        - name: STORAGE_BUCKET_ACTIVITY_PAYLOAD
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_ACTIVITY_PAYLOAD
+        - name: STORAGE_BUCKET_LOG
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_LOG
+        - name: STORAGE_BUCKET_STATE
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_STATE
+        - name: STORAGE_BUCKET_WORKLOAD_OUTPUT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: STORAGE_BUCKET_WORKLOAD_OUTPUT
+        - name: S3_PATH_STYLE_ACCESS
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: S3_PATH_STYLE_ACCESS
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DEFAULT_MINIO_ACCESS_KEY
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DEFAULT_MINIO_SECRET_KEY
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: MINIO_ENDPOINT
+        - name: CONTAINER_ORCHESTRATOR_ENABLED
+          value: "true"
+        ports:
+        - name: heartbeat
+          containerPort: 9000 # for heartbeat server
+        - containerPort: 9001 # start temporal worker port pool
+        - containerPort: 9002
+        - containerPort: 9003
+        - containerPort: 9004
+        - containerPort: 9005
+        - containerPort: 9006
+        - containerPort: 9007
+        - containerPort: 9008
+        - containerPort: 9009
+        - containerPort: 9010
+        - containerPort: 9011
+        - containerPort: 9012
+        - containerPort: 9013
+        - containerPort: 9014
+        - containerPort: 9015
+        - containerPort: 9016
+        - containerPort: 9017
+        - containerPort: 9018
+        - containerPort: 9019
+        - containerPort: 9020
+        - containerPort: 9021
+        - containerPort: 9022
+        - containerPort: 9023
+        - containerPort: 9024
+        - containerPort: 9025
+        - containerPort: 9026
+        - containerPort: 9027
+        - containerPort: 9028
+        - containerPort: 9029
+        - containerPort: 9030 # end temporal worker port pool
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+      securityContext:
+        fsGroup: 1000
+      volumes:
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: airbyte-admin
+  labels:
+    name: airbyte
+  annotations:
+    helm.sh/hook: pre-install
+    helm.sh/hook-weight: "-10"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airbyte-yml
+  labels:
+    name: airbyte
+type: Opaque
+data:
+  fileContents: "CiAgICA="
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airbyte-secrets
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-1"
+  labels:
+    name: airbyte
+type: Opaque
+stringData:
+  DATABASE_PASSWORD: "airbyte"
+  DATABASE_USER: airbyte
+  WORKLOAD_API_BEARER_TOKEN: ".Values.workload-api.bearerToken"
+  DEFAULT_MINIO_ACCESS_KEY: minio
+  DEFAULT_MINIO_SECRET_KEY: minio123
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airbyte-env
+  labels:
+    name: airbyte
+data:
+  AIRBYTE_VERSION: 0.58.0
+  AIRBYTE_EDITION: "community"
+  API_URL: /api/v1/
+  CONNECTOR_BUILDER_API_URL: "/connector-builder-api"
+  CONFIG_API_HOST: http://airbyte-server-svc:8001
+  CONFIG_ROOT: /configs
+  CONFIGS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION: "0.35.15.001"
+  DATA_DOCKER_MOUNT: airbyte_data
+  DB_DOCKER_MOUNT: airbyte_db
+  DATABASE_DB: db-airbyte
+  DATABASE_HOST: airbyte-db-svc
+  DATABASE_PORT: "5432"
+  DATABASE_URL: "jdbc:postgresql://airbyte-db-svc:5432/db-airbyte"
+  KEYCLOAK_DATABASE_URL: "jdbc:postgresql://airbyte-db-svc:5432/db-airbyte?currentSchema=keycloak"
+  GOOGLE_APPLICATION_CREDENTIALS: "/secrets/gcs-log-creds/gcp.json"
+  INTERNAL_API_HOST: airbyte-server-svc:8001
+  WORKLOAD_API_HOST: http://localhost
+  KEYCLOAK_INTERNAL_HOST: localhost
+  CONNECTOR_BUILDER_API_HOST: airbyte-connector-builder-server-svc:80
+  AIRBYTE_API_HOST: http://airbyte-server-svc:8001/api/public
+  JOB_MAIN_CONTAINER_CPU_LIMIT: ""
+  JOB_MAIN_CONTAINER_CPU_REQUEST: ""
+  JOB_MAIN_CONTAINER_MEMORY_LIMIT: ""
+  JOB_MAIN_CONTAINER_MEMORY_REQUEST: ""
+  JOBS_DATABASE_MINIMUM_FLYWAY_MIGRATION_VERSION: "0.29.15.001"
+  LOCAL_ROOT: /tmp/airbyte_local
+  LOG4J_CONFIGURATION_FILE: "log4j2-minio.xml"
+  MICROMETER_METRICS_ENABLED: "false"
+  MICROMETER_METRICS_STATSD_FLAVOR: "datadog"
+  RUN_DATABASE_MIGRATION_ON_STARTUP: "true"
+  SEGMENT_WRITE_KEY: 7UDdp5K55CyiGgsauOr2pNNujGvmhaeu
+  # Storage start
+  STORAGE_TYPE: "minio"
+  STORAGE_BUCKET_ACTIVITY_PAYLOAD: "airbyte-storage"
+  STORAGE_BUCKET_LOG: "airbyte-storage"
+  STORAGE_BUCKET_STATE: "airbyte-storage"
+  STORAGE_BUCKET_WORKLOAD_OUTPUT: "airbyte-storage"
+  MINIO_ENDPOINT: "http://airbyte-minio-svc:9000"
+  S3_PATH_STYLE_ACCESS: "true"
+  # Storage end
+  STATSD_HOST: "localhost"
+  STATSD_PORT: "8125"
+  TEMPORAL_HOST: temporal:7233
+  TEMPORAL_WORKER_PORTS: 9001,9002,9003,9004,9005,9006,9007,9008,9009,9010,9011,9012,9013,9014,9015,9016,9017,9018,9019,9020,9021,9022,9023,9024,9025,9026,9027,9028,9029,9030,9031,9032,9033,9034,9035,9036,9037,9038,9039,9040
+  TRACKING_STRATEGY: segment
+  WEBAPP_URL: http://airbyte-webapp-svc:80
+  WORKER_ENVIRONMENT: kubernetes
+  WORKSPACE_DOCKER_MOUNT: airbyte_workspace
+  WORKSPACE_ROOT: /workspace
+  METRIC_CLIENT: ""
+  OTEL_COLLECTOR_ENDPOINT: ""
+  ACTIVITY_MAX_ATTEMPT: ""
+  ACTIVITY_INITIAL_DELAY_BETWEEN_ATTEMPTS_SECONDS: ""
+  ACTIVITY_MAX_DELAY_BETWEEN_ATTEMPTS_SECONDS: ""
+  WORKFLOW_FAILURE_RESTART_DELAY_SECONDS: ""
+  AUTO_DETECT_SCHEMA: "true"
+  CONTAINER_ORCHESTRATOR_IMAGE: ""
+  LAUNCHER_MICRONAUT_ENVIRONMENTS: "control-plane,oss"
+  WORKERS_MICRONAUT_ENVIRONMENTS: "control-plane"
+  CRON_MICRONAUT_ENVIRONMENTS: "control-plane"
+  SHOULD_RUN_NOTIFY_WORKFLOWS: "true"
+  MAX_NOTIFY_WORKERS: "5"
+  KUBERNETES_CLIENT_MAX_IDLE_CONNECTIONS: ""
+  WORKLOAD_LAUNCHER_PARALLELISM: "10"
+  CONNECTOR_BUILDER_SERVER_API_HOST: http://airbyte-connector-builder-server-svc:80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airbyte-db-svc
+  labels:
+    name: db
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      protocol: TCP
+  selector:
+    name: db
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: airbyte-bootloader
+  labels:
+    name: airbyte-bootloader
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+spec:
+  #serviceAccountName: airbyte-admin
+  restartPolicy: Never
+  containers:
+    - name: airbyte-bootloader-container
+      image: airbyte/bootloader:0.58.0
+      imagePullPolicy: "IfNotPresent"
+      env:
+        - name: AIRBYTE_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: AIRBYTE_VERSION
+        - name: DATABASE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: DATABASE_HOST
+        - name: DATABASE_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: DATABASE_PORT
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DATABASE_PASSWORD
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: DATABASE_URL
+        - name: DATABASE_USER
+          valueFrom:
+            secretKeyRef:
+              name: airbyte-secrets
+              key: DATABASE_USER
+        - name: RUN_DATABASE_MIGRATION_ON_STARTUP
+          valueFrom:
+            configMapKeyRef:
+              name: airbyte-env
+              key: RUN_DATABASE_MIGRATION_ON_STARTUP
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
+        readOnlyRootFilesystem: false
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+  securityContext:
+      fsGroup: 1000
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: airbyte-db
+  labels:
+    name: db
+spec:
+  replicas: 1
+  serviceName: airbyte-db-svc
+  selector:
+    matchLabels:
+      name: db
+  template:
+    metadata:
+      labels:
+        name: db
+    spec:
+      volumes:
+        - name: task-pv-storage
+          persistentVolumeClaim:
+            claimName: local-pv
+      containers:
+        - name: airbyte-db-container
+          image: "airbyte/db:0.58.0"
+          env:
+            - name: POSTGRES_DB
+              value: db-airbyte
+            - name: POSTGRES_PASSWORD
+              value: airbyte
+            - name: POSTGRES_USER
+              value: airbyte
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+            runAsGroup: 70
+            runAsNonRoot: true
+            runAsUser: 70
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: airbyte-volume-db
+              mountPath: /var/lib/postgresql/data
+
+
+
+
+
+                                              
+     
