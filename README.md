@@ -1,1 +1,3 @@
-first commit
+# maven-project
+
+Demo Maven Project
